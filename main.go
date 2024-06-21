@@ -53,10 +53,8 @@ func main() {
     _, cancel := context.WithCancel(context.Background())
     defer cancel()
 
-    // Канал для сигналізації про завершення
     done := make(chan struct{})
 
-    // Обробка сигналу переривання
     go func() {
         sigChan := make(chan os.Signal, 1)
         signal.Notify(sigChan, os.Interrupt)
