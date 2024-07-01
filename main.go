@@ -53,10 +53,8 @@ func main() {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
-	// Канал для сигналізації про завершення
 	done := make(chan struct{})
 
-	// Обробка сигналу переривання
 	go func() {
 		sigChan := make(chan os.Signal, 1)
 		signal.Notify(sigChan, os.Interrupt)
@@ -66,7 +64,6 @@ func main() {
 		close(done)
 	}()
 
-	// Канали для комунікації з горутинами гравців
 	type playerInput struct {
 		question Question
 		resultCh chan<- int
@@ -76,7 +73,6 @@ func main() {
 		playerChannels[i] = make(chan playerInput)
 	}
 
-	// Створення горутин гравців
 	var wg sync.WaitGroup
 	for i, player := range players {
 		wg.Add(1)
