@@ -11,105 +11,131 @@ import (
 )
 
 type Player struct {
-    ID int
+	ID int
 }
 
 type Question struct {
-    Text     string
-    Options  []string
-    Correct  int
-    RoundNum int
+	Text     string
+	Options  []string
+	Correct  int
+	RoundNum int
 }
 
 type RoundResult struct {
-    RoundNum      int
-    AnswerCounts  []int
-    PlayerResults map[int]bool
+	RoundNum      int
+	AnswerCounts  []int
+	PlayerResults map[int]bool
 }
 
 func generateRound(roundNum int, rng *rand.Rand) Question {
-    return Question{
-        Text:     fmt.Sprintf("Питання %d", roundNum),
-        Options:  []string{"A", "B", "C", "D"},
-        Correct:  rng.Intn(4),
-        RoundNum: roundNum,
-    }
+	return Question{
+		Text:     fmt.Sprintf("Питання %d", roundNum),
+		Options:  []string{"A", "B", "C", "D"},
+		Correct:  rng.Intn(4),
+		RoundNum: roundNum,
+	}
 }
 
 func playerAnswer(rng *rand.Rand) int {
-    return rng.Intn(4)
+	return rng.Intn(4)
 }
 
 func main() {
-    source := rand.NewSource(time.Now().UnixNano())
-    rng := rand.New(source)
+	source := rand.NewSource(time.Now().UnixNano())
+	rng := rand.New(source)
 
-    playerCount := 5
-    players := make([]Player, playerCount)
-    for i := range players {
-        players[i] = Player{ID: i}
-    }
+	playerCount := 5
+	players := make([]Player, playerCount)
+	for i := range players {
+		players[i] = Player{ID: i}
+	}
 
-    _, cancel := context.WithCancel(context.Background())
-    defer cancel()
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
 
-    // Канал для сигналізації про завершення
-    done := make(chan struct{})
+	done := make(chan struct{})
 
-    // Обробка сигналу переривання
-    go func() {
-        sigChan := make(chan os.Signal, 1)
-        signal.Notify(sigChan, os.Interrupt)
-        <-sigChan
-        fmt.Println("\nОтримано сигнал переривання. Завершення програми...")
-        cancel()
-        close(done)
-    }()
+	go func() {
+		sigChan := make(chan os.Signal, 1)
+		signal.Notify(sigChan, os.Interrupt)
+		<-sigChan
+		fmt.Println("\nОтримано сигнал переривання. Завершення програми...")
+		cancel()
+		close(done)
+	}()
 
-    roundNum := 1
-    ticker := time.NewTicker(10 * time.Second)
-    defer ticker.Stop()
+	type playerInput struct {
+		question Question
+		resultCh chan<- int
+	}
+	playerChannels := make([]chan playerInput, playerCount)
+	for i := range playerChannels {
+		playerChannels[i] = make(chan playerInput)
+	}
 
-    fmt.Println("Гра починається!")
+	var wg sync.WaitGroup
+	for i, player := range players {
+		wg.Add(1)
+		go func(p Player, ch <-chan playerInput) {
+			defer wg.Done()
+			playerRng := rand.New(rand.NewSource(time.Now().UnixNano()))
+			for {
+				select {
+				case <-ctx.Done():
+					return
+				case input := <-ch:
+					answer := playerAnswer(playerRng)
+					input.resultCh <- answer
+				}
+			}
+		}(player, playerChannels[i])
+	}
 
-    for {
-        select {
-        case <-done:
-            fmt.Println("Гру завершено.")
-            return
-        case <-ticker.C:
-            question := generateRound(roundNum, rng)
-            fmt.Printf("\nРаунд %d: %s\n", roundNum, question.Text)
+	roundNum := 1
+	ticker := time.NewTicker(10 * time.Second)
+	defer ticker.Stop()
 
-            answerCounts := make([]int, 4)
-            playerResults := make(map[int]bool)
+	fmt.Println("Гра починається!")
 
-            var wg sync.WaitGroup
-            for _, player := range players {
-                wg.Add(1)
-                go func(p Player) {
-                    defer wg.Done()
-                    answer := playerAnswer(rng)
-                    answerCounts[answer]++
-                    playerResults[p.ID] = (answer == question.Correct)
-                }(player)
-            }
-            wg.Wait()
+	for {
+		select {
+		case <-done:
+			fmt.Println("Гру завершено.")
+			cancel()
+			wg.Wait()
+			return
+		case <-ticker.C:
+			question := generateRound(roundNum, rng)
+			fmt.Printf("\nРаунд %d: %s\n", roundNum, question.Text)
 
-            fmt.Println("Результати раунду:")
-            for i, count := range answerCounts {
-                fmt.Printf("Варіант %s: %d відповідей\n", fmt.Sprintf("%c", 'A'+i), count)
-            }
-            fmt.Println("Результати гравців:")
-            for playerID, correct := range playerResults {
-                if correct {
-                    fmt.Printf("Гравець %d: Правильно\n", playerID)
-                } else {
-                    fmt.Printf("Гравець %d: Неправильно\n", playerID)
-                }
-            }
+			answerCounts := make([]int, 4)
+			playerResults := make(map[int]bool)
 
-            roundNum++
-        }
-    }
+			resultCh := make(chan int, playerCount)
+			for i := range players {
+				playerChannels[i] <- playerInput{question: question, resultCh: resultCh}
+			}
+
+			for i := 0; i < playerCount; i++ {
+				answer := <-resultCh
+				answerCounts[answer]++
+				playerResults[i] = (answer == question.Correct)
+			}
+
+			fmt.Println("Результати раунду:")
+			for i, count := range answerCounts {
+				fmt.Printf("Варіант %s: %d відповідей\n", fmt.Sprintf("%c", 'A'+i), count)
+			}
+			fmt.Println("Результати гравців:")
+			for playerID, correct := range playerResults {
+				if correct {
+					fmt.Printf("Гравець %d: Правильно\n", playerID)
+				} else {
+					fmt.Printf("Гравець %d: Неправильно\n", playerID)
+				}
+			}
+
+			roundNum++
+		}
+	}
 }
